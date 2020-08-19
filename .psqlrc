@@ -1,0 +1,97 @@
+# Note: Create this file as .psqlrc in your Postgresql home dir so that it gets loaded when running psql client. As such, once connected, you should see something like the below
+# postgres@mtf-pop-postgres:~$ psql
+# Useful admin macros:
+# :fk_missing_indexes - FOREIGN KEYs missing INDEXes
+# :indexes_duplicate - Duplicate INDEXes
+# :indexes_useless - Useless INDEXes used less than 10K times
+# :indexes_unused - Unused INDEXes (fewer than 100K index scans and the table is more than 1G in size)
+# :ns_pg_stat_statements - Shows the namespace for pg_stat_statements
+# :queries_blocked - Queries that are blocked due to locks
+# :show_lock - Shows currently open (or waiting) locks on database rows and tables
+# .....................
+# .....................
+# :show_total_row_counts - Get total row counts across all tables in current DB
+#
+# psql (9.6.19)
+# Type "help" for help.
+# postgres@db-host-a=#
+#
+# To then run one of the macros, simply type its' name, preceeded by ":" as per below
+#
+# postgres@mtf-pop-postgres=# :show_largest_databases;
+#    name     |      owner       |  size
+# -------------+------------------+---------
+# app_db      | app_db_user      | 16 GB
+# postgres    | postgres         | 7079 kB
+# template1   | postgres         | 6961 kB
+# template0   | postgres         | 6961 kB
+# (4 rows)
+#
+
+
+\set QUIET 1
+\pset pager off
+\encoding unicode
+\pset null (null)
+-- \set AUTOCOMMIT 'off'
+-- \set ON_ERROR_ROLLBACK on
+\set COMP_KEYWORD_CASE preserve-lower
+\set IGNOREEOF
+\set PROMPT1 '%/@%`hostname -s`%R%#%x '
+\set PROMPT2 '%/@%`hostname -s`%R%#%x '
+\set VERBOSITY verbose
+\set HISTFILE ~/.psql_history- :HOST - :DBNAME
+\set HISTSIZE 2000
+\set FETCH_COUNT 1000
+\timing
+\x auto
+\echo ' Useful admin macros:'
+\echo ''
+\echo ' :fk_missing_indexes - FOREIGN KEYs missing INDEXes'
+\set fk_missing_indexes '(SELECT src_table, dst_table, fk_name, pg_size_pretty(s_size) AS src_size, pg_size_pretty(d_size) AS dst_size, d FROM (SELECT DISTINCT ON(1,2,3,4,5) textin(regclassout(c.conrelid)) AS src_table, textin(regclassout(c.confrelid)) AS dst_table, c.conname AS fk_name, pg_relation_size(c.conrelid) AS s_size, pg_relation_size(c.confrelid) AS d_size, array_upper(di.indkey::int[], 1) + 1 - array_upper(c.conkey::int[], 1) AS d FROM pg_constraint c LEFT JOIN pg_index di ON di.indrelid = c.conrelid AND array_to_string(di.indkey, '' '') ~ (''^'' || array_to_string(c.conkey, '' '') || ''( |$)'') JOIN pg_stat_user_tables st ON st.relid = c.conrelid WHERE c.contype = ''f'' ORDER BY 1,2,3,4,5,6 asc) mfk WHERE mfk.d IS DISTINCT FROM 0 AND mfk.s_size > 1000000 ORDER BY mfk.s_size DESC, mfk.d DESC)'
+\echo ' :indexes_duplicate - Duplicate INDEXes'
+\set indexes_duplicate '(SELECT table_name, sum(pg_relation_size(idx))::bigint AS index_size, (array_agg(idx))[1] AS uplicate_index1, (array_agg(idx))[2] AS duplicate_index2, (array_agg(idx))[3] AS duplicate_index3, (array_agg(idx))[4] AS duplicate_index4 FROM ( SELECT indrelid::REGCLASS AS table_name, indexrelid::regclass AS idx, (indrelid::text ||E\'\n\'|| indclass::text ||E\'\n\'|| indkey::text ||E\'\n\'|| coalesce(indexprs::text,\'\')||E\'\n\' || coalesce(indpred::text,\'\')) AS key FROM pg_index) sub GROUP BY key, table_name HAVING count(*)>1 ORDER BY sum(pg_relation_size(idx)) DESC)'
+\echo ' :indexes_useless - Useless INDEXes used less than 10K times'
+\set indexes_useless '(SELECT schemaname,relname,indexrelname,pg_size_pretty(pg_relation_size(indexrelid)) AS index_size,idx_scan,idx_tup_read,idx_tup_fetch FROM pg_stat_all_indexes WHERE schemaname not like \'pg_%\' AND idx_scan < 10000 AND idx_tup_read < 10000 AND idx_tup_fetch < 10000 ORDER BY index_size DESC)'
+\echo ' :indexes_unused - Unused INDEXes (fewer than 100K index scans and the table is more than 1G in size)'
+\set indexes_unused '( SELECT s.schemaname AS schema_name, s.relname AS table_name, s.indexrelname AS index_name, s.idx_scan AS index_scans, pg_size_pretty(pg_relation_size(s.relid)) AS table_size, pg_size_pretty(pg_relation_size(s.indexrelid)) AS index_size FROM pg_stat_user_indexes AS s JOIN pg_index i ON i.indexrelid=s.indexrelid LEFT JOIN pg_constraint c ON i.indrelid=c.conrelid AND array_to_string(i.indkey, '' '') = array_to_string(c.conkey, '' '') WHERE i.indisunique = false AND pg_relation_size(s.relid) > 1048576 AND s.idx_scan < 100000 AND c.confrelid IS NULL ORDER BY s.idx_scan ASC, pg_relation_size(s.relid) DESC)'
+\echo ' :ns_pg_stat_statements - Shows the namespace for pg_stat_statements'
+\set ns_pg_stat_statements 'SELECT n.nspname AS namespace, \'SHOW search_path;\' AS current_search_path, \'SET search_path = $search_path,\' || n.nspname || \';\' AS search_path_cmd FROM pg_namespace AS n, pg_extension AS e WHERE e.extnamespace = n.oid AND e.extname = \'pg_stat_statements\''
+\echo ' :queries_blocked - Queries that are blocked due to locks'
+\set queries_blocked '(SELECT bl.pid AS blocked_pid, a.usename AS blocked_user, NOW() - a.query_start AS blocked_duration, a.application_name AS blocked_app, bl.mode AS blocked_lock, bl.locktype AS blocked_lock_type, kl.pid AS blocking_pid, ka.usename AS blocking_user, NOW() - ka.query_start AS blocking_duration, ka.application_name AS blocking_app, kl.mode AS blocking_lock, kl.locktype AS blocking_lock_type, a.query AS blocked_statement, ka.query AS blocking_statement FROM pg_catalog.pg_locks bl JOIN pg_catalog.pg_stat_activity a ON bl.pid = a.pid JOIN pg_catalog.pg_locks kl JOIN pg_catalog.pg_stat_activity ka ON kl.pid = ka.pid ON bl.transactionid = kl.transactionid AND bl.pid != kl.pid WHERE NOT bl.granted)'
+\echo ' :show_lock - Shows currently open (or waiting) locks on database rows and tables'
+\set show_lock '(select t.relname,l.locktype,page,virtualtransaction,pid,mode,granted from pg_locks l, pg_stat_all_tables t where l.relation=t.relid order by relation asc)'
+\echo ' :queries_idle_in_txn - Queries idle in transaction'
+\set queries_idle_in_txn '(SELECT NOW() - xact_start AS xact_duration, NOW() - query_start AS query_duration, datname, pid, usename, application_name, waiting, query FROM pg_stat_activity WHERE state = \'idle in transaction\' AND pid != pg_backend_pid() AND NOW() - query_start > \'0.01second\'::INTERVAL ORDER BY xact_duration DESC)'
+\echo ' :queries_running - Queries that are running'
+\set queries_running '(SELECT NOW() - xact_start AS xact_duration, NOW() - query_start AS query_duration, datname, pid, usename, application_name, waiting, state, query FROM pg_stat_activity WHERE state != \'idle\' AND pid != pg_backend_pid() ORDER BY xact_duration DESC)'
+\echo ' :show_blocking_processes - Find what processes are blocking SQL statements'
+\set show_blocking_processes '(SELECT blocked_locks.pid AS blocked_pid, blocked_activity.usename AS blocked_user, blocking_locks.pid AS blocking_pid, blocking_activity.usename AS blocking_user, blocked_activity.query AS blocked_statement, blocking_activity.query AS current_statement_in_blocking_process FROM pg_catalog.pg_locks blocked_locks JOIN pg_catalog.pg_stat_activity blocked_activity ON blocked_activity.pid = blocked_locks.pid JOIN pg_catalog.pg_locks blocking_locks ON blocking_locks.locktype = blocked_locks.locktype AND blocking_locks.DATABASE IS NOT DISTINCT FROM blocked_locks.DATABASE AND blocking_locks.relation IS NOT DISTINCT FROM blocked_locks.relation AND blocking_locks.page IS NOT DISTINCT FROM blocked_locks.page AND blocking_locks.tuple IS NOT DISTINCT FROM blocked_locks.tuple AND blocking_locks.virtualxid IS NOT DISTINCT FROM blocked_locks.virtualxid AND blocking_locks.transactionid IS NOT DISTINCT FROM blocked_locks.transactionid AND blocking_locks.classid IS NOT DISTINCT FROM blocked_locks.classid AND blocking_locks.objid IS NOT DISTINCT FROM blocked_locks.objid AND blocking_locks.objsubid IS NOT DISTINCT FROM blocked_locks.objsubid AND blocking_locks.pid != blocked_locks.pid JOIN pg_catalog.pg_stat_activity blocking_activity ON blocking_activity.pid = blocking_locks.pid WHERE NOT blocked_locks.GRANTED)'
+\echo ' :queries_totals - Cumulative time & calls per query, assumes pg_stat_statements is in search_path. See :ns_pg_stat_statements'
+\set queries_totals '(SELECT u.usename, s.calls, s.total_time, s.rows, s.shared_blks_hit, s.shared_blks_read, s.shared_blks_written, s.blk_read_time, s.blk_write_time, s.total_time/s.calls AS avg_query_ms, s.query FROM dba.pg_stat_statements AS s, pg_user AS u WHERE u.usesysid = s.userid ORDER BY total_time DESC)'
+\echo ' :queries_waiting - Waiting queries'
+\set queries_waiting '(SELECT pg_stat_activity.pid, pg_stat_activity.query, pg_stat_activity.waiting, NOW() - pg_stat_activity.query_start AS total_time, pg_stat_activity.backend_start FROM pg_stat_activity WHERE pg_stat_activity.state != \'idle\'::TEXT AND pg_stat_activity.waiting = true)'
+\echo ' :replication_master_lag - Streaming replication info (run on the master)'
+\set replication_master_lag '(SELECT u.usename, r.*, pg_xlog_location_diff(r.write_location, r.replay_location) AS slave_lag_bytes, NOW() - r.backend_start AS connected_age FROM pg_stat_replication AS r, pg_user AS u WHERE u.usesysid = r.usesysid)'
+\echo ' :replication_slave_lag - Streaming replication lag'
+\set replication_slave_lag '(SELECT ss.recv, ss.replay, ss.recv - ss.replay AS bytes_latency FROM (SELECT pg_xlog_location_diff(pg_last_xlog_receive_location(), \'0/0\') AS recv, pg_xlog_location_diff(pg_last_xlog_replay_location(), \'0/0\') AS replay) AS ss)'
+\echo ' :schema_size - Shema size'
+\set schema_size '(SELECT n.nspname as schema_name, pg_catalog.pg_size_pretty(SUM(pg_catalog.pg_table_size(c.oid))) as size_human, SUM(pg_catalog.pg_table_size(c.oid)) AS size_bytes FROM pg_catalog.pg_class c LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname NOT IN(\'pg_catalog\', \'information_schema\') AND n.nspname !~ \'^pg_toast\' GROUP BY n.nspname ORDER BY n.nspname)'
+\echo ' :schema_size_by_object - Shema size per object type'
+\set schema_size_by_object '(SELECT n.nspname as schema_name, CASE c.relkind WHEN \'r\' THEN \'table\' WHEN \'v\' THEN \'view\' WHEN \'i\' THEN \'index\' WHEN \'S\' THEN \'sequence\' WHEN \'s\' THEN \'special\' WHEN \'f\' THEN \'foreign_table\' END as obj_type, pg_catalog.pg_size_pretty(SUM(pg_catalog.pg_table_size(c.oid))) as size_human, SUM(pg_catalog.pg_table_size(c.oid)) AS size_bytes FROM pg_catalog.pg_class c LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname NOT IN(\'pg_catalog\', \'information_schema\') AND n.nspname !~ \'^pg_toast\' GROUP BY n.nspname, c.relkind ORDER BY n.nspname, c.relkind)'
+\echo ' :vacuum_table_status - Database vacuum status'
+\set vacuum_table_status '(SELECT relid::REGCLASS AS table_name, COALESCE(last_vacuum, last_autovacuum) AS last_vacuum, COALESCE(last_analyze, last_autoanalyze) AS last_analyze FROM pg_stat_user_tables)'
+\echo ' :vacuum_xid_wrap_check - Database xid check. Returns info on DBs where their xid age is over 1B'
+\set vacuum_xid_wrap_check '(SELECT datname, age(datfrozenxid), datfrozenxid FROM pg_database WHERE age(datfrozenxid) > 1000000000)'
+\echo ' :show_largest_tables - Show largest tables in a particular database'
+\set show_largest_tables '(SELECT schemaname,relname,n_live_tup FROM pg_stat_user_tables ORDER BY n_live_tup DESC)'
+\echo ' :db_is_master - If return value is "f", then this is the master node. Otherwise, it\'s a hot standby'
+\set db_is_master '(SELECT pg_is_in_recovery())'
+\echo ' :show_largest_databases - Find the largest databases in your cluster'
+\set show_largest_databases '(SELECT d.datname AS Name, pg_catalog.pg_get_userbyid(d.datdba) AS Owner, CASE WHEN pg_catalog.has_database_privilege(d.datname, \'CONNECT\') THEN pg_catalog.pg_size_pretty(pg_catalog.pg_database_size(d.datname)) ELSE \'No Access\' END AS Size FROM pg_catalog.pg_database d ORDER BY CASE WHEN pg_catalog.has_database_privilege(d.datname, \'CONNECT\') THEN pg_catalog.pg_database_size(d.datname) ELSE NULL END DESC LIMIT 20)'
+\echo ' :show_largest_tables - Find the largest tables in your databases'
+\set show_largest_tables '(SELECT nspname || \'.\' || relname AS "relation", pg_size_pretty(pg_total_relation_size(C.oid)) AS "total_size" FROM pg_class C LEFT JOIN pg_namespace N ON (N.oid = C.relnamespace) WHERE nspname NOT IN (\'pg_catalog\', \'information_schema\') AND C.relkind <> \'i\' AND nspname !~ \'^pg_toast\' ORDER BY pg_total_relation_size(C.oid) DESC LIMIT 20)'
+\echo ' :show_total_row_counts - Get total row counts across all tables in current DB'
+\set show_total_row_counts '(select table_schema, table_name, (xpath(\'/row/count/text()\', query_to_xml(\'select count(*) from \'||format(\'%I.%I\', table_schema, table_name), true, true, \'\')))[1]::text::int as row_count from information_schema.tables where table_schema = \'public\' order by row_count desc)'
+\echo ''
+\unset QUIET
