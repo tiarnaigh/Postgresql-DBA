@@ -93,5 +93,7 @@
 \set show_largest_tables '(SELECT nspname || \'.\' || relname AS "relation", pg_size_pretty(pg_total_relation_size(C.oid)) AS "total_size" FROM pg_class C LEFT JOIN pg_namespace N ON (N.oid = C.relnamespace) WHERE nspname NOT IN (\'pg_catalog\', \'information_schema\') AND C.relkind <> \'i\' AND nspname !~ \'^pg_toast\' ORDER BY pg_total_relation_size(C.oid) DESC LIMIT 20)'
 \echo ' :show_total_row_counts - Get total row counts across all tables in current DB'
 \set show_total_row_counts '(select table_schema, table_name, (xpath(\'/row/count/text()\', query_to_xml(\'select count(*) from \'||format(\'%I.%I\', table_schema, table_name), true, true, \'\')))[1]::text::int as row_count from information_schema.tables where table_schema = \'public\' order by row_count desc)'
+\echo ' :show_analyze_vacuum - Show details of last vacuum/analyze operations'
+\set show_analyze_vacuum '(select relname,last_vacuum, last_autovacuum, last_analyze, last_autoanalyze from pg_stat_user_tables order by last_vacuum)'
 \echo ''
 \unset QUIET
